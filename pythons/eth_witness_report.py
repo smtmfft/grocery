@@ -3,39 +3,40 @@ from web3.middleware import geth_poa_middleware
 from random import randint
 from time import sleep, time
 import json
+
 l1_url = "https://your-l1-node-url"
 node_url = "https://your-l2-node-url"
 
 # Connect to an l1 Ethereum node
-l1_w3 = Web3(Web3.HTTPProvider(l1_url, {'timeout':60}))
+l1_w3 = Web3(Web3.HTTPProvider(l1_url, {'timeout':10}))
 l1_w3.middleware_onion.inject(geth_poa_middleware, layer=0)
 
 # Connect to an l2 Ethereum node
-w3 = Web3(Web3.HTTPProvider(node_url, {'timeout':60}))  # Replace with your node's URL
+l2_w3 = Web3(Web3.HTTPProvider(node_url, {'timeout':10}))  # Replace with your node's URL
 # Check connection status
 if l1_w3.isConnected():
     print(f"Connected to l1 node {l1_url}")
-if w3.isConnected():
+if l2_w3.isConnected():
     print(f"Connected to l2 node {node_url}")
 
 # Get the latest block number
 # block_number = 12345  # Replace with the desired block number
-block_height = int(w3.eth.blockNumber)
-print("Latest block number:", block_height)
+block_height = int(l2_w3.eth.blockNumber)
+print("Latest l2 block number:", block_height)
 def dump_block_trace(block_num: int):
     method = "debug_traceBlockByNumber"
     params = [hex(block_num), {}]
-    response = w3.provider.make_request(method, params)
+    response = l2_w3.provider.make_request(method, params)
     fp = open(f"block_trace_{block_num}.json", "w")
     for result_i in response['result']:
         fp.writelines(json.dumps(line)+"\n" for line in result_i['result']['structLogs'])
     fp.close()
-    
+
 #dump_block_trace(401506)
 def dump_block_trace_no_stack(block_num: int):
     method = "debug_traceBlockByNumber"
     params = [hex(block_num), {"DisableStack": True}]
-    response = w3.provider.make_request(method, params)
+    response = l2_w3.provider.make_request(method, params)
     fp = open(f"block_trace_{block_num}_no_stack.json", "w")
     for result_i in response['result']:
         fp.writelines(json.dumps(line)+"\n" for line in result_i['result']['structLogs'])
@@ -44,7 +45,7 @@ def dump_block_trace_no_stack(block_num: int):
 def dump_block_trace_with_params(block_num: int, logger_conf: dict):
     method = "debug_traceBlockByNumber"
     params = [hex(block_num), logger_conf]
-    response = w3.provider.make_request(method, params)
+    response = l2_w3.provider.make_request(method, params)
     fp = open(f"block_trace_{block_num}_no_conf.json", "w")
     for result_i in response['result']:
         fp.writelines(json.dumps(line)+"\n" for line in result_i['result']['structLogs'])
@@ -60,12 +61,12 @@ def tx_gas_used(tx_trace: list):
         if 'error' in trace_i.keys():
            op_gas = tx_trace[i-1]['gas'] - tx_trace[i+1]['gas']
         sum += op_gas
-    return sum        
+    return sum
 
 def parse_anchor(block_num):
-    block = w3.eth.get_block(block_num)
+    block = l2_w3.eth.get_block(block_num)
     txs = block['transactions']
-    tx = w3.eth.get_transaction(txs[0])
+    tx = l2_w3.eth.get_transaction(txs[0])
     call_data_str = tx['input']
     call_data_hex = bytes.fromhex(call_data_str.lstrip('0x'))
     call_sig = call_data_hex[:4]
@@ -75,28 +76,29 @@ def parse_anchor(block_num):
     l1_height = int.from_bytes(call_data_hex[68:68+32], 'big')
     prtGasUsed = int.from_bytes(call_data_hex[100:100+32], 'big')
     print(f"l1_hash: {l1_hash}, l1_sig_root: {l1_sig_root}, l1_height: {l1_height}, prtGasUsed: {prtGasUsed}")
+    return l1_hash, l1_sig_root, l1_height, prtGasUsed
 
 
 def filter_block_gt_gasUsed(cmp_fn, start, end):
     for i in range(start, end):
-        block_i = w3.eth.get_block(i)
+        block_i = l2_w3.eth.get_block(i)
         if cmp_fn(block_i['gasUsed']):
             print(f"block {i}: gasUsed: {block_i['gasUsed']}")
 
 
-#l1 parse
+#l1 parse part
 from eth_abi import decode_single, decode_abi
 
 def parse_abi_function(abi, data):
     item = abi
     encoded_signature = item['name'] + '(' + ','.join(i['type'] for i in item['inputs']) + ')'
     # print(encoded_signature)
-    selector = bytes.hex(w3.keccak(bytes(encoded_signature, 'utf')))[:8]
+    selector = bytes.hex(l1_w3.keccak(bytes(encoded_signature, 'utf')))[:8]
     # print(selector[:8], data)
     if selector in data[2:10]:
         decoded_data = decode_abi([i['type'] for i in item['inputs']], bytes.fromhex(data[10:]))
         txlist_bytes = decoded_data[1]
-        txlist_hash = w3.keccak(txlist_bytes)
+        txlist_hash = l1_w3.keccak(txlist_bytes)
         return {
             'name': item['name'],
             'inputs': [(info, d.hex()) for (info, d) in list(zip(item['inputs'], decoded_data))],
@@ -138,9 +140,11 @@ def parse_l1_propose_block(block_num):
             propose_call['l2_height'] = get_l2_height(block_num, tx_hash)
             results.append(propose_call)
     print(results)
+    return results
 
 def get_l2_height(block_number, tx_hash):
     receipt = l1_w3.eth.get_transaction_receipt(tx_hash)
+    #print(receipt)
     # TODO: parse index instead hardcode
     l2_height = int.from_bytes(receipt['logs'][1]['topics'][1], 'big')
     return l2_height
@@ -151,3 +155,67 @@ def get_l2_height(block_number, tx_hash):
 #        'topics': receipt['logs'][1]['topics']
 #    })
 #    print(events)
+
+# generate test request for zkevm-circuits
+def get_l1_info(block_number):
+    block = l1_w3.eth.getBlock(block_number)
+    return block['hash'], block['parentHash'], block['timestamp'], block['miner']
+
+def get_l2_info(block_number):
+    assert block_number > 0
+    block = l2_w3.eth.getBlock(block_number)
+    prtBlock = l2_w3.eth.getBlock(block_number - 1)
+    return block['hash'], block['parentHash'], block['timestamp'], block['miner'], block['gasUsed'], prtBlock['gasUsed']
+
+def get_request_instance(block_number):
+    l2_info = get_l2_info(block_number);
+    print("l2_info:", l2_info)
+    anchor_info = parse_anchor(block_number);
+    print("anchor_info:", anchor_info)
+    l1_info = get_l1_info(anchor_info[2])
+    print("l1_info:", l1_info)
+
+    #filter txlist tx
+    parse_l1_propose_block(anchor_info[2] + 1)
+    print(f"""\n
+            RequestExtraInstance {{
+                l1_signal_service: "7a2088a1bFc9d81c55368AE168C2C02570cB814F".to_string(),
+                l2_signal_service: "1000777700000000000000000000000000000007".to_string(),
+                l2_contract: "1000777700000000000000000000000000000001".to_string(),
+                meta_data: RequestMetaData {{
+                    id: {block_number},
+                    timestamp: {l1_info[2]},
+                    l1_height: {anchor_info[2]},
+                    l1_hash: "{bytes.hex(l1_info[0])}"
+                        .to_string(),
+                    l1_mix_hash: "0000000000000000000000000000000000000000000000000000000000000000"
+                        .to_string(),
+                    deposits_processed:
+                        "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421"
+                            .to_string(),
+                    tx_list_hash:
+                        "569e75fc77c1a856f6daaf9e69d8a9566ca34aa47f9133711ce065a571af0cfd"
+                            .to_string(),
+                    tx_list_byte_start: 0,
+                    tx_list_byte_end: 0,
+                    gas_limit: 820000000,
+                    beneficiary: "{l1_info[3]}".to_string(),
+                    treasury: "df09A0afD09a63fb04ab3573922437e1e637dE8b".to_string(),
+                }},
+                block_hash: "{bytes.hex(l2_info[0])}"
+                    .to_string(),
+                parent_hash: "{bytes.hex(l2_info[1])}"
+                    .to_string(),
+                signal_root: "{anchor_info[1]}"
+                    .to_string(),
+                graffiti: "6162630000000000000000000000000000000000000000000000000000000000"
+                    .to_string(),
+                prover: "70997970C51812dc3A010C7d01b50e0d17dc79C8".to_string(),
+                gas_used: {l2_info[4]},
+                parent_gas_used: {l2_info[5]},
+                block_max_gas_limit: 6000000,
+                max_transactions_per_block: 79,
+                max_bytes_per_tx_list: 120000,
+                anchor_gas_limit: 250000,
+            }},
+    """)
