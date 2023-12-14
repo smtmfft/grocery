@@ -182,7 +182,7 @@ def get_request_instance(block_number):
                 l1_signal_service: "7a2088a1bFc9d81c55368AE168C2C02570cB814F".to_string(),
                 l2_signal_service: "1000777700000000000000000000000000000007".to_string(),
                 l2_contract: "1000777700000000000000000000000000000001".to_string(),
-                meta_data: RequestMetaData {{
+                request_meta_data: RequestMetaData {{
                     id: {block_number},
                     timestamp: {l1_info[2]},
                     l1_height: {anchor_info[2]},
@@ -190,17 +190,21 @@ def get_request_instance(block_number):
                         .to_string(),
                     l1_mix_hash: "0000000000000000000000000000000000000000000000000000000000000000"
                         .to_string(),
-                    deposits_processed:
+                    deposits_hash:
                         "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421"
                             .to_string(),
-                    tx_list_hash:
+                    blob_hash:
                         "569e75fc77c1a856f6daaf9e69d8a9566ca34aa47f9133711ce065a571af0cfd"
                             .to_string(),
-                    tx_list_byte_start: 0,
-                    tx_list_byte_end: 0,
+                    tx_list_byte_offset: 0,
+                    tx_list_byte_size: 0,
                     gas_limit: 820000000,
-                    beneficiary: "{l1_info[3]}".to_string(),
+                    coinbase: "{l1_info[3].removeprefix('0x')}".to_string(),
+                    difficulty: "0000000000000000000000000000000000000000000000000000000000000001".to_string(),
+                    extra_data: "0000000000000000000000000000000000000000000000000000000000000002".to_string(),
+                    parent_metahash: "0000000000000000000000000000000000000000000000000000000000000003".to_string(),
                     treasury: "df09A0afD09a63fb04ab3573922437e1e637dE8b".to_string(),
+                    ..Default::default()
                 }},
                 block_hash: "{bytes.hex(l2_info[0])}"
                     .to_string(),
