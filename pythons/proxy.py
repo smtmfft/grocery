@@ -64,5 +64,5 @@ def create_proxy_app(target_url: str):
 if __name__ == "__main__":
     target_url = os.getenv("TARGET_URL")
     app = create_proxy_app(target_url)
-    app.logger.setLevel(logging.DEBUG)
+    app.logger.setLevel(logging.INFO)
     app.run(host="0.0.0.0", port=8090, debug=True)

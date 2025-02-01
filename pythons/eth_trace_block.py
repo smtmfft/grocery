@@ -4,6 +4,12 @@ from collections import defaultdict
 import json
 from hexbytes import HexBytes
 from flask import current_app as app, jsonify
+from itertools import islice
+
+
+def chunk_list(lst, chunk_size):
+    iterator = iter(lst)
+    return iter(lambda: list(islice(iterator, chunk_size)), [])
 
 
 class HexJsonEncoder(json.JSONEncoder):
@@ -22,7 +28,6 @@ def get_block_data(w3: Web3, block_number: int):
     storage_slots = defaultdict(set)
     contracts = {}
 
-    proof_requests = []
     # trace block txs
     trace = w3.provider.make_request(
         "debug_traceBlockByNumber", [hex(block_number), {"tracer": "prestateTracer"}]
@@ -36,11 +41,11 @@ def get_block_data(w3: Web3, block_number: int):
                     storage_slots[addr].update(info["storage"].keys())
                 # collect contracts
                 if "code" in info and info["code"] != "0x":
-                    code_hash = w3.keccak(hexstr=addr)
+                    code_hash = w3.keccak(hexstr=info["code"])
                     contracts["0x" + code_hash.hex()] = info["code"]
 
-    app.logger.debug(f"touched addresses: {addresses}")
-    app.logger.debug(f"storage slots: {storage_slots}")
+    app.logger.info(f"touched addresses: {addresses}")
+    app.logger.info(f"storage slots: {storage_slots}")
     app.logger.info(f"contract keys: {contracts.keys()}")
 
     proof_requests = []
@@ -51,19 +56,20 @@ def get_block_data(w3: Web3, block_number: int):
         # post state proof
         proof_requests.append(("eth_getProof", [address, slots, hex(block_number)]))
 
+    app.logger.info(f"num of proof_requests: {len(proof_requests)}")
     # batch rpc all
-    batch_provider = w3.provider
-    responses = batch_provider.make_batch_request(proof_requests)
-
-    app.logger.debug(f"batch_provider eth_getProof responses: {responses}")
-    # proofs
     pre_proofs = []
     post_proofs = []
-    for i, response in enumerate(responses):
-        if i % 2 == 0:
-            pre_proofs.append(serialize_web3_data(response["result"]))
-        else:
-            post_proofs.append(serialize_web3_data(response["result"]))
+    batch_provider = w3.provider
+    for chunk_proof_requests in chunk_list(proof_requests, 256):
+        responses = batch_provider.make_batch_request(chunk_proof_requests)
+        app.logger.debug(f"batch_provider eth_getProof responses: {responses}")
+        # proofs
+        for i, response in enumerate(responses):
+            if i % 2 == 0:
+                pre_proofs.append(serialize_web3_data(response["result"]))
+            else:
+                post_proofs.append(serialize_web3_data(response["result"]))
 
     # ancestors
     ancestor_hashes = []
