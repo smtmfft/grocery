@@ -1,13 +1,9 @@
-from flask import Flask, jsonify, request
 from web3 import Web3
 from eth_utils import to_hex
 from collections import defaultdict
 import json
 from hexbytes import HexBytes
-import logging
-import os
-
-app = Flask(__name__)
+from flask import current_app as app, jsonify
 
 
 class HexJsonEncoder(json.JSONEncoder):
@@ -104,9 +100,6 @@ class Web3Encoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 
-app.json_encoder = Web3Encoder
-
-
 def serialize_web3_data(obj):
     if isinstance(obj, dict):
         return {k: serialize_web3_data(v) for k, v in obj.items()}
@@ -123,14 +116,12 @@ def serialize_web3_data(obj):
     return obj
 
 
-rpc_url = os.getenv("TAIKO_DEBUG_RPC")
-
 # TODO: real lru
 lru_cache = defaultdict(set)
 
 
-@app.route("/trace/<int:block_number>")
-def trace_block(block_number):
+def trace_block(block_number, rpc_url):
+    app.json_encoder = Web3Encoder
     app.logger.info(f"Received request for block {block_number}")
 
     if block_number in lru_cache:
@@ -156,7 +147,10 @@ def trace_block(block_number):
         app.logger.info("Request completed")
 
 
-app.logger.setLevel(logging.INFO)
 if __name__ == "__main__":
-    app.logger.info("Starting server on port 8090")
-    app.run(host="0.0.0.0", port=8090, debug=True)
+    import os
+    import sys
+
+    rpc_url = os.getenv("TAIKO_DEBUG_RPC")
+    block_number = sys.argv[1]
+    trace_block(block_number, rpc_url)
