@@ -5,6 +5,7 @@ import json
 from hexbytes import HexBytes
 from flask import current_app as app, jsonify
 from itertools import islice
+from blob_utils import get_tx_list_from_expected_blob
 
 
 def chunk_list(lst, chunk_size):
@@ -19,12 +20,44 @@ class HexJsonEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
+# preload some addresses, like coinbase, 0x00, etc
+preload_addresses = set(
+    [Web3.to_checksum_address("0x0000000000000000000000000000000000000000")]
+)
+
+block_blob_slot_hash_offset_dict = {
+    800000: (
+        10934114,
+        "0x010b218ea00b124aca73e9b53cc81e8e56aa6e4a3415a50fc72e7f7f911f5b6d",
+        (0, 79849),
+    )
+}
+
+
+def init_preload_addresses(block_number: int):
+    if block_number not in block_blob_slot_hash_offset_dict:
+        raise ValueError(
+            f"block_number {block_number} not in block_blob_slot_hash_offset_dict"
+        )
+
+    blob_info = block_blob_slot_hash_offset_dict[block_number]
+    txs = get_tx_list_from_expected_blob(blob_info[0], blob_info[1])
+    app.logger.info(f"Decoded {len(txs)} transactions")
+    for tx in txs:
+
+        preload_addresses.add(tx.data["from"])
+        preload_addresses.add(tx.data["to"])
+
+
 def get_block_data(w3: Web3, block_number: int):
+    # init preload addresses
+    init_preload_addresses(block_number)
+
     # block info
     block = w3.eth.get_block(block_number, full_transactions=True)
 
     # collect addresses & slots
-    addresses = set()
+    addresses = preload_addresses
     storage_slots = defaultdict(set)
     contracts = {}
 
@@ -36,9 +69,11 @@ def get_block_data(w3: Web3, block_number: int):
     if "result" in trace:
         for tx_trace in trace["result"]:
             for addr, info in tx_trace["result"].items():
-                addresses.add(addr)
+                checksum_addr = Web3.to_checksum_address(addr)
+                app.logger.debug(f"add checksum_addr: {checksum_addr} of {addr}")
+                addresses.add(checksum_addr)
                 if "storage" in info:
-                    storage_slots[addr].update(info["storage"].keys())
+                    storage_slots[checksum_addr].update(info["storage"].keys())
                 # collect contracts
                 if "code" in info and info["code"] != "0x":
                     code_hash = w3.keccak(hexstr=info["code"])
@@ -50,6 +85,7 @@ def get_block_data(w3: Web3, block_number: int):
 
     proof_requests = []
     for address in addresses:
+        app.logger.debug(f"proof request for address: {address}")
         slots = list(storage_slots[address])
         # pre state proof
         proof_requests.append(("eth_getProof", [address, slots, hex(block_number - 1)]))
@@ -67,9 +103,14 @@ def get_block_data(w3: Web3, block_number: int):
         # proofs
         for i, response in enumerate(responses):
             if i % 2 == 0:
+                app.logger.debug(f"pre_proofs: {response}")
                 pre_proofs.append(serialize_web3_data(response["result"]))
             else:
+                app.logger.debug(f"post_proofs: {response}")
                 post_proofs.append(serialize_web3_data(response["result"]))
+
+    app.logger.info(f"num of pre_proofs: {len(pre_proofs)}")
+    app.logger.info(f"num of post_proofs: {len(post_proofs)}")
 
     # ancestors
     ancestor_hashes = []
@@ -79,7 +120,6 @@ def get_block_data(w3: Web3, block_number: int):
         if current_number < 0:
             break
         proof_requests.append(("eth_getBlockByNumber", [hex(current_number), False]))
-
         current_number -= 1
 
     responses = batch_provider.make_batch_request(proof_requests)
