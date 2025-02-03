@@ -4,6 +4,7 @@ import hashlib
 from io import BytesIO
 import os
 import requests
+from rlp_utils import decode_tx_list
 from typing import Optional
 import zlib
 
@@ -199,8 +200,6 @@ def zlib_compress_data(data: bytes) -> bytes:
     return zlib.compress(data)
 
 
-from rlp_utils import decode_tx_list
-
 def get_tx_list_from_expected_blob(slot_id: int, expected_versioned_hash: str) -> list:
     """
     从 eth blob 获取交易列表
@@ -210,6 +209,7 @@ def get_tx_list_from_expected_blob(slot_id: int, expected_versioned_hash: str) -
     raw_txlist_bytes = zlib_decompress_data(zip_tx_list[0:79849])
     txs = decode_tx_list(raw_txlist_bytes)
     return txs
+
 
 if __name__ == "__main__":
     app = Flask(__name__)
@@ -224,3 +224,8 @@ if __name__ == "__main__":
         raw_txlist_bytes = zlib_decompress_data(zip_tx_list[0:79849])
         txs = decode_tx_list(raw_txlist_bytes)
         app.logger.info(f"Decoded {len(txs)} transactions")
+        for tx in txs[:10]:
+            app.logger.info(f"tx: {tx.data}")
+            sender = tx.data["from"]
+            to = tx.data["to"]
+            app.logger.info(f"tx from: {sender}, to: {to}")
